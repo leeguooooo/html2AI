@@ -302,9 +302,7 @@
         top = maxTop;
         clamped = true;
       }
-      if (clamped) {
-        applyDock(dockSide, top);
-      }
+      applyDock(dockSide, clamped ? top : rect.top);
       return;
     }
     if (rect.left < margin) {
