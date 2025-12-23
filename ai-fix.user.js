@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Page Fixer
 // @namespace    https://example.com/ai-page-fixer
-// @version      0.6.0
+// @version      0.7.0
 // @description  Copy selected page content into an AI-friendly format
 // @match        http://*/*
 // @match        https://*/*
@@ -23,6 +23,8 @@
   const DEBUG = false;
   const HEALTH_INTERVAL_MS = 1500;
   const ACTIVE_FLAG = "__AI_FIX_ACTIVE__";
+  const DOCK_THRESHOLD = 36;
+  const DOCK_TAB_PX = 12;
   const SMART_SELECTOR = [
     "article",
     "main",
@@ -51,6 +53,7 @@
       background: transparent;
       user-select: none;
       width: auto;
+      transition: transform 180ms ease;
     }
     #${PANEL_ID} button {
       background: #111;
@@ -61,6 +64,21 @@
       color: #f5f5f5;
       cursor: pointer;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    #${PANEL_ID}.ai-fix-docked-left {
+      left: 0;
+      transform: translateX(calc(-100% + var(--ai-fix-tab, 12px)));
+    }
+    #${PANEL_ID}.ai-fix-docked-right {
+      transform: translateX(calc(100% - var(--ai-fix-tab, 12px)));
+    }
+    #${PANEL_ID}.ai-fix-docked-left:hover,
+    #${PANEL_ID}.ai-fix-docked-right:hover {
+      transform: translateX(0);
+    }
+    #${PANEL_ID}.ai-fix-dragging {
+      transition: none;
+      transform: translateX(0);
     }
     #${PANEL_ID} button:active {
       transform: translateY(1px);
@@ -125,6 +143,7 @@
   let iframeMaskListenersAttached = false;
   let iframeMaskTimer = null;
   let suppressClick = false;
+  let dockSide = null;
 
   let pickMode = false;
   let highlight = null;
@@ -152,22 +171,31 @@
       const stored = localStorage.getItem(STORAGE_KEY);
       if (!stored) return;
       const pos = JSON.parse(stored);
-      if (typeof pos.left === "number" && typeof pos.top === "number") {
-        panel.style.left = `${pos.left}px`;
+      if (typeof pos.top === "number") {
         panel.style.top = `${pos.top}px`;
-        panel.style.right = "auto";
-        clampPanelPosition();
       }
+      if (pos.dock === "left" || pos.dock === "right") {
+        applyDock(pos.dock, typeof pos.top === "number" ? pos.top : undefined);
+      } else if (typeof pos.left === "number") {
+        panel.style.left = `${pos.left}px`;
+        panel.style.top = `${typeof pos.top === "number" ? pos.top : 20}px`;
+        panel.style.right = "auto";
+      }
+      clampPanelPosition();
     } catch (err) {
       // Ignore storage errors.
     }
   }
 
-  function savePosition(left, top) {
+  function savePosition(left, top, dock) {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ left: Math.round(left), top: Math.round(top) })
+        JSON.stringify({
+          left: Math.round(left),
+          top: Math.round(top),
+          dock: dock || null,
+        })
       );
     } catch (err) {
       // Ignore storage errors.
@@ -176,6 +204,10 @@
 
   function startDrag(event) {
     if (event.button !== 0) return;
+    if (dockSide) {
+      clearDock();
+    }
+    panel.classList.add("ai-fix-dragging");
     const rect = panel.getBoundingClientRect();
     dragState = {
       offsetX: event.clientX - rect.left,
@@ -204,7 +236,6 @@
   function stopDrag(event) {
     if (!dragState) return;
     const rect = panel.getBoundingClientRect();
-    savePosition(rect.left, rect.top);
     if (dragState.moved) {
       suppressClick = true;
       window.setTimeout(() => {
@@ -212,7 +243,45 @@
       }, 0);
     }
     dragState = null;
+    panel.classList.remove("ai-fix-dragging");
+    snapToEdge(rect);
     clampPanelPosition();
+  }
+
+  function snapToEdge(rect) {
+    if (!rect) rect = panel.getBoundingClientRect();
+    const leftDistance = rect.left;
+    const rightDistance = window.innerWidth - rect.right;
+    if (leftDistance <= DOCK_THRESHOLD) {
+      applyDock("left");
+      return;
+    }
+    if (rightDistance <= DOCK_THRESHOLD) {
+      applyDock("right");
+      return;
+    }
+    clearDock();
+    savePosition(rect.left, rect.top, null);
+  }
+
+  function clearDock() {
+    dockSide = null;
+    panel.classList.remove("ai-fix-docked-left", "ai-fix-docked-right");
+  }
+
+  function applyDock(side, topOverride) {
+    if (!panel) return;
+    dockSide = side;
+    panel.classList.toggle("ai-fix-docked-left", side === "left");
+    panel.classList.toggle("ai-fix-docked-right", side === "right");
+    panel.style.right = "auto";
+    const rect = panel.getBoundingClientRect();
+    const top = typeof topOverride === "number" ? topOverride : rect.top;
+    const anchorLeft =
+      side === "left" ? 0 : Math.max(0, window.innerWidth - rect.width);
+    panel.style.left = `${anchorLeft}px`;
+    panel.style.top = `${top}px`;
+    savePosition(anchorLeft, top, side);
   }
 
   function clampPanelPosition() {
@@ -224,6 +293,20 @@
     let clamped = false;
     const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
     const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    if (dockSide) {
+      if (rect.top < margin) {
+        top = margin;
+        clamped = true;
+      }
+      if (rect.bottom > window.innerHeight - margin) {
+        top = maxTop;
+        clamped = true;
+      }
+      if (clamped) {
+        applyDock(dockSide, top);
+      }
+      return;
+    }
     if (rect.left < margin) {
       left = margin;
       clamped = true;
@@ -244,7 +327,7 @@
       panel.style.left = `${left}px`;
       panel.style.top = `${top}px`;
       panel.style.right = "auto";
-      savePosition(left, top);
+      savePosition(left, top, null);
     }
   }
 
@@ -252,6 +335,7 @@
     if (document.getElementById(PANEL_ID)) return;
     panel = document.createElement("div");
     panel.id = PANEL_ID;
+    panel.style.setProperty("--ai-fix-tab", `${DOCK_TAB_PX}px`);
     panel.innerHTML = `
       <button type="button" data-action="pick">复制给AI</button>
     `;

@@ -13,6 +13,7 @@ A minimal userscript that copies selected or clicked page content into an AI-fri
 - Click "复制给AI" to enter pick mode.
 - Click any element to copy its content.
 - If text is selected, it copies the selection immediately.
+- Drag the button near the screen edge to dock and auto-hide; hover to reveal.
 
 ## Notes
 
